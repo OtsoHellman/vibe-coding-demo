@@ -1,27 +1,52 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
+import sqlite3
 
-# Define the file where feedback will be saved
-FEEDBACK_FILE = "feedback.csv"
+# Define SQLite database connection
+DB_NAME = "feedback.db"
+
+def initialize_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS feedback (
+                      id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      name TEXT,
+                      rating INTEGER,
+                      feedback TEXT)''')
+    conn.commit()
+    conn.close()
+
+def save_feedback(name, rating, feedback):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''INSERT INTO feedback (name, rating, feedback)
+                      VALUES (?, ?, ?)''', (name, rating, feedback))
+    conn.commit()
+    conn.close()
 
 # Load existing feedback (if any)
-def load_feedback(file_path):
-    if Path(file_path).is_file():
-        return pd.read_csv(file_path)
-    else:
-        return pd.DataFrame(columns=["Name", "Email", "Rating", "Feedback"])
+def load_feedback():
+    conn = sqlite3.connect(DB_NAME)
+    try:
+        return pd.read_sql_query("SELECT * FROM feedback", conn)
+    except:
+        return pd.DataFrame(columns=["Name", "Rating", "Feedback"])
+    finally:
+        conn.close()
 
-# Save feedback to CSV
-def save_feedback(name, email, rating, feedback):
-    feedback_data = pd.DataFrame([{ "Name": name, "Email": email, "Rating": rating, "Feedback": feedback}])
-    if Path(FEEDBACK_FILE).is_file():
-        feedback_data.to_csv(FEEDBACK_FILE, mode='a', header=False, index=False)
-    else:
-        feedback_data.to_csv(FEEDBACK_FILE, index=False)
+def fetch_feedback():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, rating, feedback FROM feedback")
+    feedback_data = cursor.fetchall()
+    conn.close()
+    return feedback_data
 
+# Initialize SQLite database at app startup
+initialize_db()
 # Load existing feedback
-existing_feedback = load_feedback(FEEDBACK_FILE)
+existing_feedback = load_feedback()
 
 # Apply CSS styling
 CSS = """
@@ -76,26 +101,52 @@ CSS = """
 
 st.markdown(CSS, unsafe_allow_html=True)
 
-# Streamlit app layout
-st.markdown('<div class="main">', unsafe_allow_html=True)
-st.header("🌟 Event Feedback")
-st.markdown("We value your feedback! Please take a moment to share your thoughts about the event.")
+# Navigation for separate pages
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Give Feedback", "View Feedback Results"])
 
-# Input fields
-with st.form("feedback_form"):
-    name = st.text_input("Name", max_chars=50)
-    email = st.text_input("Email")
-    rating = st.slider("Rating (1-5 Stars)", min_value=1, max_value=5, step=1)
-    feedback = st.text_area("Your Feedback")
+if page == "Give Feedback":
+    st.header("🌟 Event Feedback")
+    st.markdown("We value your feedback! Please take a moment to share your thoughts about the event.")
 
-    # Submit button
-    submitted = st.form_submit_button("Submit")
+    with st.form("feedback_form"):
+        name = st.text_input("Name", max_chars=50)
+        rating = st.slider("Rating (1-5 Stars)", min_value=1, max_value=5, step=1)
+        feedback = st.text_area("Your Feedback")
 
-    if submitted:
-        if name and email and rating and feedback:
-            save_feedback(name, email, rating, feedback)
-            st.success("Thank you for your feedback!")
-        else:
-            st.error("Please fill in all the required fields.")
+        submitted = st.form_submit_button("Submit")
 
-st.markdown("</div>", unsafe_allow_html=True)
+        if submitted:
+            if name and rating and feedback:
+                save_feedback(name, rating, feedback)
+                st.success("Thank you for your feedback!")
+            else:
+                st.error("Please fill in all the required fields.")
+
+elif page == "View Feedback Results":
+    st.header("Feedback Results")
+
+    feedback_data = fetch_feedback()
+
+    if feedback_data:
+        # Extract ratings and count frequencies
+        ratings = [row[1] for row in feedback_data]
+
+        # Display Average Rating
+        average_rating = sum(ratings) / len(ratings)
+        st.metric(label="Average Rating", value=f"{average_rating:.2f}")
+
+        # Visualize Ratings
+        st.subheader("Ratings Breakdown")
+        ratings_data = pd.DataFrame({'Rating': ratings})
+        ratings_count = ratings_data['Rating'].value_counts().sort_index()
+        st.bar_chart(ratings_count)
+ 
+        # Display individual feedback
+        for name, rating, feedback in feedback_data:
+            st.subheader(f"{name}")
+            st.write(f"**Rating:** {rating}")
+            st.write(f"**Feedback:** {feedback}")
+            st.markdown("---")
+    else:
+        st.write("No feedback available yet.")
